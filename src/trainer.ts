@@ -14,6 +14,7 @@ interface TrainerCallbacks {
   onStatus: (message: string) => void;
   onTick: (remaining: number, hits: number, shots: number) => void;
   onRunning: (running: boolean) => void;
+  onFullscreen: (open: boolean) => void;
   onComplete: (trial: Trial) => void;
 }
 type LockCanvas = HTMLCanvasElement & {
@@ -23,10 +24,17 @@ type LockCanvas = HTMLCanvasElement & {
 };
 export class Trainer {
   private canvas: HTMLCanvasElement;
+  private room: HTMLElement;
   private ctx: CanvasRenderingContext2D;
   private callbacks: TrainerCallbacks;
   private active = false;
   private requesting = false;
+  private ending = false;
+  private attempt = 0;
+  private roomOpen = false;
+  private nativeFullscreen = false;
+  private pointerCaptured = false;
+  private scrollBeforeRoom = { x: 0, y: 0 };
   private inputMode: InputMode = "adjusted";
   private candidate: Candidate | null = null;
   private baseline = 0;
@@ -45,14 +53,29 @@ export class Trainer {
   private disposed = false;
   private resizeObserver: ResizeObserver;
 
-  constructor(canvas: HTMLCanvasElement, callbacks: TrainerCallbacks) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    room: HTMLElement,
+    callbacks: TrainerCallbacks,
+  ) {
     this.canvas = canvas;
+    this.room = room;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Your browser does not support the aim canvas.");
     this.ctx = ctx;
     this.callbacks = callbacks;
     document.addEventListener("pointerlockchange", this.onLockChange);
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
     document.addEventListener("mousemove", this.onMove);
+    document.addEventListener("wheel", this.onScrollInput, {
+      passive: false,
+      capture: true,
+    });
+    document.addEventListener("touchmove", this.onScrollInput, {
+      passive: false,
+      capture: true,
+    });
+    document.addEventListener("keydown", this.onKeyDown, true);
     document.addEventListener("visibilitychange", this.onVisibility);
     window.addEventListener("blur", this.onBlur);
     canvas.addEventListener("mousedown", this.onShot);
@@ -63,10 +86,76 @@ export class Trainer {
     this.draw(performance.now());
   }
   get isRunning(): boolean {
-    return this.active || this.requesting;
+    return this.active || this.requesting || this.ending;
+  }
+  private openRoom(): void {
+    if (this.roomOpen) return;
+    this.scrollBeforeRoom = { x: window.scrollX, y: window.scrollY };
+    this.roomOpen = true;
+    this.room.classList.add("expanded-room");
+    document.documentElement.classList.add("room-open");
+    this.callbacks.onFullscreen(true);
+  }
+  private async requestRoomFullscreen(): Promise<boolean> {
+    if (document.fullscreenElement === this.room) return true;
+    if (!this.room.requestFullscreen) return false;
+    try {
+      await this.room.requestFullscreen({ navigationUI: "hide" });
+      if (!this.roomOpen) {
+        if (document.fullscreenElement === this.room)
+          await document.exitFullscreen();
+        return false;
+      }
+      return document.fullscreenElement === this.room;
+    } catch {
+      // A browser/embedding policy may deny fullscreen. Keep the scroll-locked viewport view.
+      return false;
+    }
+  }
+  private async closeRoom(): Promise<void> {
+    if (!this.roomOpen) return;
+    this.roomOpen = false;
+    if (document.fullscreenElement === this.room) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        /* Esc remains available for browser fullscreen. */
+      }
+    }
+    this.room.classList.remove("expanded-room");
+    document.documentElement.classList.remove("room-open");
+    window.scrollTo({
+      left: this.scrollBeforeRoom.x,
+      top: this.scrollBeforeRoom.y,
+      behavior: "instant",
+    });
+    this.callbacks.onFullscreen(false);
+  }
+  async toggleFullscreen(): Promise<void> {
+    if (this.isRunning) return;
+    if (this.roomOpen) {
+      await this.closeRoom();
+      return;
+    }
+    this.openRoom();
+    const native = await this.requestRoomFullscreen();
+    if (this.roomOpen && !this.isRunning)
+      this.callbacks.onStatus(
+        native
+          ? "Fullscreen Control Room. Run next trial when ready. Esc exits fullscreen."
+          : "Expanded Control Room. Your browser did not allow fullscreen. Run next trial when ready; Esc closes the room.",
+      );
+  }
+  private releaseStaleCapture(): void {
+    if (
+      !this.active &&
+      !this.requesting &&
+      document.pointerLockElement === this.canvas
+    )
+      document.exitPointerLock();
   }
   async start(candidate: Candidate, baseline: number): Promise<void> {
-    if (this.isRunning) return;
+    if (this.isRunning || this.disposed) return;
     if (!this.canvas.requestPointerLock) {
       this.callbacks.onStatus(
         "Aim trials need a desktop browser with mouse pointer lock. The calculator and Range log still work here.",
@@ -74,9 +163,11 @@ export class Trainer {
       return;
     }
     this.requesting = true;
+    const attempt = ++this.attempt;
     this.candidate = candidate;
     this.baseline = baseline;
     this.callbacks.onRunning(true);
+    this.openRoom();
     this.callbacks.onStatus(
       "Allow mouse capture to start. Press Esc to cancel a trial.",
     );
@@ -86,18 +177,29 @@ export class Trainer {
           unadjustedMovement: true,
         });
         await request;
+        if (attempt !== this.attempt || this.disposed) {
+          this.releaseStaleCapture();
+          return;
+        }
         this.inputMode =
           request && typeof request.then === "function" ? "raw" : "adjusted";
       } catch (error) {
+        if (attempt !== this.attempt || this.disposed) {
+          this.releaseStaleCapture();
+          return;
+        }
         if (
           !(error instanceof DOMException) ||
           error.name !== "NotSupportedError"
         )
           throw error;
         await this.canvas.requestPointerLock();
+        if (attempt !== this.attempt || this.disposed) {
+          this.releaseStaleCapture();
+          return;
+        }
         this.inputMode = "adjusted";
       }
-      if (this.disposed) return;
       if (document.pointerLockElement !== this.canvas) {
         // Older implementations return void; allow their lock-change event to arrive.
         await new Promise<void>((resolve, reject) => {
@@ -125,6 +227,12 @@ export class Trainer {
           changed();
         });
       }
+      // Pointer lock goes first: fullscreen consumes transient activation needed by capture.
+      const fullscreen = await this.requestRoomFullscreen();
+      if (attempt !== this.attempt || this.disposed) {
+        this.releaseStaleCapture();
+        return;
+      }
       if (
         this.disposed ||
         document.hidden ||
@@ -140,28 +248,74 @@ export class Trainer {
       this.reactionMs = [];
       this.target = targetAt(0);
       this.tickSecond = -1;
-      this.canvas.focus();
+      this.canvas.focus({ preventScroll: true });
       this.callbacks.onStatus(
-        this.inputMode === "raw"
-          ? "Raw mouse input · aim with the crosshair and left-click · Esc cancels"
-          : "Adjusted mouse input · browser/OS acceleration may affect feel · verify in Valorant",
+        `${fullscreen ? "Fullscreen" : "Expanded room"} · ` +
+          (this.inputMode === "raw"
+            ? "Raw mouse input · aim with the crosshair and left-click · Esc cancels"
+            : "Adjusted mouse input · browser/OS acceleration may affect feel · verify in Valorant"),
       );
       cancelAnimationFrame(this.animation);
       this.frame();
     } catch {
-      this.requesting = false;
-      this.active = false;
-      if (document.pointerLockElement === this.canvas)
-        document.exitPointerLock();
-      this.callbacks.onRunning(false);
-      this.callbacks.onStatus(
+      if (attempt !== this.attempt) {
+        this.releaseStaleCapture();
+        return;
+      }
+      await this.stop(
         "Mouse capture was unavailable. Use Chrome or Edge on desktop, allow capture, and click Run next trial again.",
       );
     }
   }
   private onLockChange = (): void => {
-    if (this.active && document.pointerLockElement !== this.canvas)
+    if (document.pointerLockElement === this.canvas) {
+      this.pointerCaptured = true;
+    } else if (this.pointerCaptured) {
+      this.pointerCaptured = false;
       this.cancel("Trial cancelled. Incomplete trials are not scored.");
+    }
+  };
+  private onFullscreenChange = (): void => {
+    const wasFullscreen = this.nativeFullscreen;
+    this.nativeFullscreen = document.fullscreenElement === this.room;
+    if (this.nativeFullscreen && !this.roomOpen) {
+      void document.exitFullscreen().catch(() => {});
+    } else if (wasFullscreen && !this.nativeFullscreen && this.roomOpen) {
+      if (this.active || this.requesting)
+        this.cancel(
+          "Trial cancelled when fullscreen ended. Incomplete trials are not scored.",
+        );
+      else void this.closeRoom();
+    }
+  };
+  private onScrollInput = (event: Event): void => {
+    if (this.roomOpen && event.cancelable) event.preventDefault();
+  };
+  private onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && this.roomOpen) {
+      if (this.active || this.requesting) this.cancel();
+      else void this.closeRoom();
+      return;
+    }
+    if (
+      this.isRunning &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      [
+        " ",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "PageUp",
+        "PageDown",
+        "Home",
+        "End",
+        "Tab",
+      ].includes(event.key)
+    )
+      event.preventDefault();
   };
   private onVisibility = (): void => {
     if (document.hidden)
@@ -242,8 +396,6 @@ export class Trainer {
   };
   private finish(): void {
     if (!this.active || !this.candidate) return;
-    this.active = false;
-    cancelAnimationFrame(this.animation);
     const trial: Trial = {
       ...this.candidate,
       id: crypto.randomUUID(),
@@ -255,20 +407,27 @@ export class Trainer {
       inputMode: this.inputMode,
       completedAt: new Date().toISOString(),
     };
-    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
-    this.callbacks.onRunning(false);
-    this.callbacks.onComplete(trial);
-    this.yaw = this.pitch = 0;
-    this.draw(performance.now());
+    void this.stop("", trial);
   }
   cancel(message = "Trial cancelled. Incomplete trials are not scored."): void {
-    if (!this.active) return;
+    if (!this.active && !this.requesting) return;
+    void this.stop(message);
+  }
+  private async stop(message: string, trial?: Trial): Promise<void> {
+    if (!this.active && !this.requesting) return;
+    this.attempt++;
     this.active = false;
+    this.requesting = false;
+    this.ending = true;
     cancelAnimationFrame(this.animation);
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+    await this.closeRoom();
     this.yaw = this.pitch = 0;
+    this.ending = false;
+    if (this.disposed) return;
     this.callbacks.onRunning(false);
-    this.callbacks.onStatus(message);
+    if (trial) this.callbacks.onComplete(trial);
+    else this.callbacks.onStatus(message);
     this.draw(performance.now());
   }
   private resize(): void {
@@ -410,10 +569,15 @@ export class Trainer {
     cancelAnimationFrame(this.animation);
     this.resizeObserver.disconnect();
     document.removeEventListener("pointerlockchange", this.onLockChange);
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     document.removeEventListener("mousemove", this.onMove);
+    document.removeEventListener("wheel", this.onScrollInput, true);
+    document.removeEventListener("touchmove", this.onScrollInput, true);
+    document.removeEventListener("keydown", this.onKeyDown, true);
     document.removeEventListener("visibilitychange", this.onVisibility);
     window.removeEventListener("blur", this.onBlur);
     this.canvas.removeEventListener("mousedown", this.onShot);
     this.canvas.removeEventListener("contextmenu", this.onContext);
+    void this.closeRoom();
   }
 }

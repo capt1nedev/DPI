@@ -60,6 +60,7 @@ test("pointer capture, target hit, timed completion, and cancellation work", asy
   await expect
     .poll(() => page.evaluate(() => document.pointerLockElement?.id))
     .toBe("aim-canvas");
+  await expect(page.locator("#trainer-status")).toContainText("mouse input");
   await expect(page.locator("#start-trial")).toBeDisabled();
   const target = targetAt(0);
   // Inject known relative mouse counts after real pointer capture to test the look-to-hit path.

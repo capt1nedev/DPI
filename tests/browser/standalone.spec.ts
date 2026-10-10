@@ -19,6 +19,10 @@ test("standalone build works offline and completes a real 25-second trial", asyn
   await expect
     .poll(() => page.evaluate(() => document.pointerLockElement?.id))
     .toBe("aim-canvas");
+  await expect(page.locator("#trainer-status")).toContainText("mouse input");
+  await expect
+    .poll(() => page.evaluate(() => document.fullscreenElement?.id))
+    .toBe("control-room");
   await page.evaluate(({ yaw, pitch }) => {
     const movement = new MouseEvent("mousemove");
     Object.defineProperties(movement, {
@@ -35,6 +39,10 @@ test("standalone build works offline and completes a real 25-second trial", asyn
     "trial saved: 1 hits",
     { timeout: 30_000 },
   );
+  await expect
+    .poll(() => page.evaluate(() => document.fullscreenElement))
+    .toBeNull();
+  await expect(page.locator("html")).not.toHaveClass(/room-open/);
   await page.context().setOffline(false);
   await page.reload();
   await expect(page.locator("#progress-count")).toHaveText("1 / 6");

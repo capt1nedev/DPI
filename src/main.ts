@@ -110,11 +110,11 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <div class="section-heading"><div><div class="eyebrow">01 / COMPARE YOUR FEEL</div><h2 id="calibration-heading">Three settings. One fair test.</h2></div><p>25 seconds per trial. Two trials per setting.<br>Same targets. Alternating order. Your own results.</p></div>
       <div id="candidate-cards" class="candidate-grid"></div>
       <div class="workshop-grid">
-        <section class="trainer-card" aria-labelledby="trainer-heading">
-          <div class="trainer-header"><div class="trainer-title"><span class="status-dot"></span><h3 id="trainer-heading">The control room</h3></div><span class="mono" id="next-setting">BASELINE / 0.30</span></div>
+        <section id="control-room" class="trainer-card" aria-labelledby="trainer-heading">
+          <div class="trainer-header"><div class="trainer-title"><span class="status-dot"></span><h3 id="trainer-heading">The control room</h3></div><div class="trainer-tools"><span class="mono" id="next-setting">BASELINE / 0.30</span><button id="fullscreen-room" class="button secondary fullscreen-button" type="button" aria-controls="control-room" aria-pressed="false">Fullscreen</button></div></div>
           <div class="canvas-wrap">
-            <canvas id="aim-canvas" tabindex="0" aria-label="Aim trial: move your mouse to aim the center crosshair at the green target and left-click. Escape cancels."></canvas>
-            <div id="trainer-overlay" class="trainer-overlay"><span class="preview-tag">AIM TRIAL / 25 SECONDS</span><h3>A small change.<br>A clear comparison.</h3><p>Use the center crosshair to hit green targets.<br>Mouse capture starts when you run a trial.</p><span class="keyboard-hint"><kbd>ESC</kbd> releases your mouse</span></div>
+            <canvas id="aim-canvas" tabindex="0" aria-label="Aim trial: move your mouse to aim the center crosshair at the green target and left-click. Escape cancels and exits fullscreen."></canvas>
+            <div id="trainer-overlay" class="trainer-overlay"><span class="preview-tag">AIM TRIAL / 25 SECONDS</span><h3>A small change.<br>A clear comparison.</h3><p>Use the center crosshair to hit green targets.<br>Trials open fullscreen and capture your mouse.</p><span class="keyboard-hint"><kbd>ESC</kbd> releases your mouse and exits the room</span></div>
             <div class="live-hud" id="live-hud" hidden><span><b id="time-left">25</b><small>SECONDS</small></span><span><b id="live-hits">0</b><small>HITS</small></span><span><b id="live-accuracy">—</b><small>ACCURACY</small></span></div>
           </div>
           <div class="trainer-footer"><p id="trainer-status" role="status">Desktop mouse required. Close distractions and get comfortable.</p><button id="start-trial" class="button primary">Run next trial ${icon("arrow")}</button></div>
@@ -282,36 +282,46 @@ function updateConverter(): void {
       : "—";
 }
 
-const trainer = new Trainer(element<HTMLCanvasElement>("aim-canvas"), {
-  onStatus: (message) => {
-    element("trainer-status").textContent = message;
+const trainer = new Trainer(
+  element<HTMLCanvasElement>("aim-canvas"),
+  element("control-room"),
+  {
+    onStatus: (message) => {
+      element("trainer-status").textContent = message;
+    },
+    onTick: (remaining, hits, shots) => {
+      element("time-left").textContent = String(remaining);
+      element("live-hits").textContent = String(hits);
+      element("live-accuracy").textContent = shots
+        ? `${Math.round((hits / shots) * 100)}%`
+        : "—";
+    },
+    onRunning: (running) => {
+      element<HTMLButtonElement>("start-trial").disabled = running;
+      element<HTMLButtonElement>("fullscreen-room").disabled = running;
+      element<HTMLFieldSetElement>("profile-fields").disabled = running;
+      element<HTMLButtonElement>("clear-results").disabled =
+        running || (!data.trials.length && !data.rangeChecks.length);
+      element("trainer-overlay").hidden = running;
+      element("live-hud").hidden = !running;
+      element("aim-canvas").classList.toggle("captured", running);
+    },
+    onFullscreen: (open) => {
+      const button = element<HTMLButtonElement>("fullscreen-room");
+      button.textContent = open ? "Exit fullscreen" : "Fullscreen";
+      button.setAttribute("aria-pressed", String(open));
+    },
+    onComplete: (trial) => {
+      data.trials.push(trial);
+      data.trials = data.trials.slice(-500);
+      persist();
+      updateUI();
+      element("trainer-status").textContent =
+        `${labels[trial.variant]} trial saved: ${trial.hits} hits, ${Math.round(accuracy(trial) * 100)}% accuracy, score ${fmt(score(trial), 1)}. Rest briefly before the next trial.`;
+      element<HTMLButtonElement>("start-trial").focus({ preventScroll: true });
+    },
   },
-  onTick: (remaining, hits, shots) => {
-    element("time-left").textContent = String(remaining);
-    element("live-hits").textContent = String(hits);
-    element("live-accuracy").textContent = shots
-      ? `${Math.round((hits / shots) * 100)}%`
-      : "—";
-  },
-  onRunning: (running) => {
-    element<HTMLButtonElement>("start-trial").disabled = running;
-    element<HTMLFieldSetElement>("profile-fields").disabled = running;
-    element<HTMLButtonElement>("clear-results").disabled =
-      running || (!data.trials.length && !data.rangeChecks.length);
-    element("trainer-overlay").hidden = running;
-    element("live-hud").hidden = !running;
-    element("aim-canvas").classList.toggle("captured", running);
-  },
-  onComplete: (trial) => {
-    data.trials.push(trial);
-    data.trials = data.trials.slice(-500);
-    persist();
-    updateUI();
-    element("trainer-status").textContent =
-      `${labels[trial.variant]} trial saved: ${trial.hits} hits, ${Math.round(accuracy(trial) * 100)}% accuracy, score ${fmt(score(trial), 1)}. Rest briefly before the next trial.`;
-    element<HTMLButtonElement>("start-trial").focus({ preventScroll: true });
-  },
-});
+);
 
 settingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -335,14 +345,13 @@ element("swipe").addEventListener("input", () => {
     `${element<HTMLInputElement>("swipe").value} cm`;
 });
 element("start-trial").addEventListener("click", () => {
-  element("aim-canvas").scrollIntoView({
-    block: "center",
-    behavior: "instant",
-  });
   void trainer.start(
     nextCandidate(data.settings, data.trials),
     data.settings.sensitivity,
   );
+});
+element("fullscreen-room").addEventListener("click", () => {
+  void trainer.toggleFullscreen();
 });
 element("new-dpi").addEventListener("input", updateConverter);
 element<HTMLFormElement>("range-form").addEventListener("submit", (event) => {

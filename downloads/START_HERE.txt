@@ -3,8 +3,13 @@ SENS LAB — QUICK START
 1. Extract this ZIP to a folder on your Windows PC.
 2. Open SensLab.html in Chrome or Edge.
 3. Keep your mouse at 1600 DPI to start.
-4. Click Run next trial and allow mouse capture.
-5. Aim at green targets and left-click. Esc releases the mouse.
+4. Click Run next trial and allow mouse capture. The Control Room opens fullscreen.
+5. Aim at green targets and left-click. Esc cancels the trial and exits the room.
+6. Use the Fullscreen button to expand the room before a trial if you prefer.
+
+Mouse-wheel/touchpad scrolling and scroll keys are blocked during trials.
+If browser fullscreen is unavailable, the room fills the browser window instead.
+The page returns to its original scroll position when the trial ends or is cancelled.
 
 0.30 sensitivity is a provisional starting point, not a measured best setting.
 Compare 0.255, 0.30, and 0.345, then check control and comfort in Valorant's Range.

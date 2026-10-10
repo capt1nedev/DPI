@@ -692,6 +692,54 @@ input::-webkit-inner-spin-button {
   font-weight: 500;
   font-size: 12px;
 }
+.trainer-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fullscreen-button {
+  min-height: 30px;
+  padding: 7px 10px;
+  font-size: 9px;
+}
+html.room-open,
+html.room-open body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.trainer-card.expanded-room,
+.trainer-card:fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  overscroll-behavior: none;
+}
+.trainer-card.expanded-room > .canvas-wrap,
+.trainer-card:fullscreen > .canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.trainer-card.expanded-room > .trainer-header,
+.trainer-card.expanded-room > .trainer-footer,
+.trainer-card.expanded-room > .trainer-caveat {
+  flex-shrink: 0;
+}
+.trainer-card.expanded-room .trainer-footer p {
+  max-width: none;
+}
+.trainer-card.expanded-room .live-hud b {
+  font-size: 32px;
+}
 .mono {
   font:
     8px ui-monospace,
@@ -711,6 +759,8 @@ canvas {
   width: 100%;
   height: 100%;
   cursor: crosshair;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 canvas.captured {
   cursor: none;
