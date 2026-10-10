@@ -2,17 +2,27 @@ SENS LAB — QUICK START
 
 1. Extract this ZIP to a folder on your Windows PC.
 2. Open SensLab.html in Chrome or Edge.
-3. Keep your mouse at 1600 DPI to start.
-4. Click Run next trial and allow mouse capture. The Control Room opens fullscreen.
-5. Aim at green targets and left-click. Esc cancels the trial and exits the room.
-6. Use the Fullscreen button to expand the room before a trial if you prefer.
+3. Enter your actual mouse DPI, starting Valorant sensitivity, and comfortable mouse travel.
+4. Keep your mouse at that DPI and click Start optimization.
+5. Run all six trials. The Control Room opens fullscreen and captures your mouse.
+6. Aim at green targets and left-click. Esc cancels the trial and exits the room.
+7. Your results show Apply these settings: exact mouse DPI and Valorant sensitivity.
+8. Copy or enter those settings in Valorant, then check comfort and control in the Range.
+9. Optional: Refine result runs six trials with smaller changes around the winner.
+   Up to two refinement rounds are available.
+
+The app tunes sensitivity while keeping your hardware DPI unchanged.
+It cannot change your mouse or Valorant settings for you.
+If results are inconsistent, repeat the trials before choosing a setting.
 
 Mouse-wheel/touchpad scrolling and scroll keys are blocked during trials.
 If browser fullscreen is unavailable, the room fills the browser window instead.
 The page returns to its original scroll position when the trial ends or is cancelled.
 
-0.30 sensitivity is a provisional starting point, not a measured best setting.
-Compare 0.255, 0.30, and 0.345, then check control and comfort in Valorant's Range.
+If you forgot your sensitivity, 0.30 at 1600 DPI is a provisional starting point.
+The first round compares 0.255, 0.30, and 0.345 at those defaults.
+Recommendations use your actual completed trials, accuracy, and estimated mouse space.
+They identify the best choice among tested settings, not a guaranteed universal optimum.
 
 The app is self-contained. Some managed browsers block local HTML files.
 The source repository includes instructions for running a local web server.

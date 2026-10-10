@@ -4,6 +4,7 @@ import {
   aimDelta,
   candidates,
   cm360,
+  currentTrials,
   DEFAULT_SETTINGS,
   edpi,
   equivalentSensitivity,
@@ -11,6 +12,7 @@ import {
   nextCandidate,
   parseSavedData,
   recommendation,
+  refineConfiguration,
   score,
   targetAt,
   TRIAL_MS,
@@ -129,6 +131,147 @@ test("variable repeat scores do not yield an overconfident recommendation", () =
     trial("higher", 4),
   ];
   assert.equal(recommendation(done, settings).variant, null);
+});
+test("optimization returns the exact tested settings and performance evidence", () => {
+  const done = ["lower", "current", "higher", "lower", "current", "higher"].map(
+    (v) => trial(v as Variant, v === "lower" ? 20 : 10),
+  );
+  const result = recommendation(done, settings, 15);
+  assert.equal(result.status, "ready");
+  assert.deepEqual(result.settings, { dpi: 1600, sensitivity: 0.255 });
+  assert.equal(result.evidence?.gainPercent, 100);
+  assert.equal(result.evidence?.accuracy, 1);
+  assert.equal(result.evidence?.trialCount, 6);
+  assert.equal(result.evidence?.targetMs, 700);
+  assert.equal(result.evidence?.fitsSwipe, false);
+});
+test("tied alternatives never fall back to a poorly performing baseline", () => {
+  const done = [
+    trial("lower", 100),
+    trial("lower", 100),
+    trial("current", 20),
+    trial("current", 20),
+    trial("higher", 100),
+    trial("higher", 100),
+  ];
+  const result = recommendation(done, settings);
+  assert.equal(result.status, "ready");
+  assert.equal(result.variant, "lower");
+  assert.equal(result.evidence?.closeScores, true);
+  assert.equal(recommendation(done, settings, 15).variant, "higher");
+});
+test("space only changes the choice among similarly performing candidates", () => {
+  const tied = [
+    trial("lower", 100),
+    trial("lower", 100),
+    trial("current", 100),
+    trial("current", 100),
+    trial("higher", 100),
+    trial("higher", 100),
+  ];
+  assert.equal(recommendation(tied, settings, 15).variant, "current");
+  assert.equal(recommendation(tied, settings, 12).variant, "higher");
+  assert.equal(recommendation(tied, settings, 5).variant, "current");
+  const strong = tied.map((t) =>
+    t.variant === "lower" ? trial("lower", 150) : t,
+  );
+  assert.equal(recommendation(strong, settings, 12).variant, "lower");
+  assert.equal(recommendation(strong, settings, 12).evidence?.fitsSwipe, false);
+});
+test("inconsistent trials cannot produce a recommendation even when means tie", () => {
+  const done = [
+    trial("lower", 10),
+    trial("lower", 10),
+    trial("current", 10),
+    trial("current", 10),
+    trial("higher", 16),
+    trial("higher", 4),
+  ];
+  assert.equal(recommendation(done, settings).status, "repeat");
+  assert.equal(recommendation(done, settings).settings, null);
+});
+test("refinement tests smaller changes around the winner and isolates rounds", () => {
+  const config = { ...settings, runId: "run-a", spread: 0.15 };
+  const done = ["lower", "current", "higher", "lower", "current", "higher"].map(
+    (v) =>
+      trial(v as Variant, v === "higher" ? 20 : 10, {
+        runId: "run-a",
+        spread: 0.15,
+      }),
+  );
+  const result = recommendation(done, config, 15);
+  const refined = refineConfiguration(config, result)!;
+  assert.deepEqual(refined, {
+    dpi: 1600,
+    sensitivity: 0.345,
+    spread: 0.075,
+    runId: "run-a",
+  });
+  assert.deepEqual(
+    candidates(refined).map((c) => c.sensitivity),
+    [0.3191, 0.345, 0.3709],
+  );
+  assert.deepEqual(currentTrials(done, refined), []);
+  assert.deepEqual(currentTrials(done, { ...config, runId: "run-b" }), []);
+  assert.equal(recommendation(done, refined).status, "pending");
+  assert.equal(
+    refineConfiguration(refined, recommendation(done, refined)),
+    null,
+  );
+  const fine = refineConfiguration(refined, result)!;
+  assert.equal(fine.spread, 0.0375);
+  assert.equal(fine.dpi, 1600);
+  assert.equal(fine.runId, "run-a");
+  assert.equal(refineConfiguration(fine, result), null);
+  assert.equal(
+    refineConfiguration({ ...refined, spread: 0.0375 }, result),
+    null,
+  );
+});
+test("saved optimization rounds preserve original inputs and migrate older histories", () => {
+  const initialSettings = { dpi: 1600, sensitivity: 0.3 };
+  const config = {
+    dpi: 1600,
+    sensitivity: 0.345,
+    spread: 0.075,
+    runId: "round-a",
+  };
+  const refinedTrial = trial("current", 10, {
+    ...candidates(config)[1],
+    baseline: config.sensitivity,
+  });
+  const record = {
+    version: 1,
+    settings: config,
+    initialSettings,
+    swipeCm: 15,
+    trials: [refinedTrial],
+    rangeChecks: [],
+  };
+  const restored = parseSavedData(JSON.stringify(record));
+  assert.deepEqual(restored.initialSettings, initialSettings);
+  assert.deepEqual(restored.settings, config);
+  assert.deepEqual(currentTrials(restored.trials, config), [refinedTrial]);
+  const legacy = parseSavedData(
+    JSON.stringify({
+      ...record,
+      settings,
+      initialSettings: undefined,
+      trials: [trial("current", 10)],
+    }),
+  );
+  assert.deepEqual(legacy.initialSettings, settings);
+  assert.equal(currentTrials(legacy.trials, settings).length, 1);
+  const malformed = parseSavedData(
+    JSON.stringify({
+      ...record,
+      trials: [
+        { ...refinedTrial, spread: 99 },
+        { ...refinedTrial, runId: 123 },
+      ],
+    }),
+  );
+  assert.deepEqual(malformed.trials, []);
 });
 test("targets are deterministic, separated, and angular hit detection is correct", () => {
   assert.deepEqual(targetAt(10), targetAt(10));

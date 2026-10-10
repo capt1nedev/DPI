@@ -11,10 +11,10 @@ test("calculator, pad fit, conversion, and settings survive reload", async ({
   await expect(page.locator("#cm360")).toHaveText("27.2");
   await expect(page.locator("#converted-sens")).toHaveText("0.6");
   await page.locator("#swipe").fill("5");
-  await page.getByRole("button", { name: "Update test settings" }).click();
+  await page.getByRole("button", { name: "Start optimization" }).click();
   await expect(page.locator("#fit-pill")).toHaveText("May need a lift");
   await page.locator("#sensitivity").fill("0.25");
-  await page.getByRole("button", { name: "Update test settings" }).click();
+  await page.getByRole("button", { name: "Start optimization" }).click();
   await expect(page.locator("#edpi")).toHaveText("400");
   await expect(page.locator("#converted-sens")).toHaveText("0.5");
   await page.reload();

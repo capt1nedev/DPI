@@ -1113,6 +1113,82 @@ kbd {
   border-radius: 5px;
   margin-top: 15px;
 }
+.apply-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding-bottom: 17px;
+  border-bottom: 1px solid #5b733b;
+}
+.apply-values span,
+.apply-values small {
+  display: block;
+  color: #b9c8a9;
+  font-size: 9px;
+  line-height: 1.6;
+}
+.apply-values span {
+  letter-spacing: 0.7px;
+}
+.apply-values strong {
+  display: block;
+  margin: 6px 0;
+  font:
+    600 clamp(24px, 3vw, 36px) ui-monospace,
+    monospace;
+  letter-spacing: -1px;
+  overflow-wrap: anywhere;
+}
+.result-details {
+  margin: 14px 0;
+  font-size: 10px;
+}
+.result-details div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 5px 12px;
+  margin: 9px 0;
+}
+.result-details dt {
+  color: #b9c8a9;
+}
+.result-details dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+}
+.recommendation-card .result-space {
+  font-size: 10px;
+  color: var(--lime);
+  border-top: 1px solid #5b733b;
+  padding-top: 12px;
+}
+.recommendation-card .result-space.warning {
+  color: #edc689;
+}
+.recommendation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.recommendation-card .field-help {
+  font-size: 10px;
+}
+.settings-copy {
+  width: 100%;
+  min-height: 90px;
+  margin-top: 10px;
+  padding: 12px;
+  background: #172019;
+  border: 1px solid #5b733b;
+  border-radius: 5px;
+  color: var(--lime);
+  font:
+    12px/1.6 ui-monospace,
+    monospace;
+  resize: vertical;
+}
 .history-panel {
   border: 1px solid var(--line);
   border-radius: 6px;

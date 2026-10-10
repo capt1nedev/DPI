@@ -9,7 +9,11 @@ export interface Settings {
   dpi: number;
   sensitivity: number;
 }
-export interface Candidate extends Settings {
+export interface TestConfig extends Settings {
+  spread?: number;
+  runId?: string;
+}
+export interface Candidate extends TestConfig {
   variant: Variant;
 }
 export interface Trial extends Candidate {
@@ -31,12 +35,16 @@ export interface RangeCheck extends Candidate {
 }
 export interface SavedData {
   version: 1;
-  settings: Settings;
+  settings: TestConfig;
+  initialSettings: Settings;
   swipeCm: number;
   trials: Trial[];
   rangeChecks: RangeCheck[];
 }
 export const DEFAULT_SETTINGS: Settings = { dpi: 1600, sensitivity: 0.3 };
+export const TEST_SPREADS = [0.15, 0.075, 0.0375] as const;
+export const testSpread = (settings: TestConfig): number =>
+  settings.spread ?? 0.15;
 
 export function validateSettings(
   dpi: number,
@@ -61,26 +69,34 @@ export const equivalentSensitivity = (
   settings: Settings,
   newDpi: number,
 ): number => edpi(settings) / newDpi;
-export function candidates(settings: Settings): Candidate[] {
+export function candidates(settings: TestConfig): Candidate[] {
   return VARIANTS.map((variant, i) => ({
     dpi: settings.dpi,
     sensitivity: Math.max(
       0.01,
       Math.min(
         10,
-        Math.round(settings.sensitivity * [0.85, 1, 1.15][i] * 10000) / 10000,
+        Math.round(
+          settings.sensitivity *
+            [1 - testSpread(settings), 1, 1 + testSpread(settings)][i] *
+            10000,
+        ) / 10000,
       ),
     ),
     variant,
+    ...(settings.spread !== undefined ? { spread: settings.spread } : {}),
+    ...(settings.runId !== undefined ? { runId: settings.runId } : {}),
   }));
 }
 export function matchesSettings(
   entry: Trial | RangeCheck,
-  settings: Settings,
+  settings: TestConfig,
 ): boolean {
   return (
     entry.dpi === settings.dpi &&
     entry.baseline === settings.sensitivity &&
+    testSpread(entry) === testSpread(settings) &&
+    entry.runId === settings.runId &&
     candidates(settings).some(
       (c) => c.variant === entry.variant && c.sensitivity === entry.sensitivity,
     )
@@ -93,10 +109,13 @@ export const score = (trial: Trial): number =>
 export function average(values: number[]): number {
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 }
-export function currentTrials(trials: Trial[], settings: Settings): Trial[] {
+export function currentTrials(trials: Trial[], settings: TestConfig): Trial[] {
   return trials.filter((t) => matchesSettings(t, settings));
 }
-export function nextCandidate(settings: Settings, trials: Trial[]): Candidate {
+export function nextCandidate(
+  settings: TestConfig,
+  trials: Trial[],
+): Candidate {
   const matching = currentTrials(trials, settings);
   const counts = Object.fromEntries(
     VARIANTS.map((v) => [v, matching.filter((t) => t.variant === v).length]),
@@ -116,8 +135,9 @@ export interface Comparison {
   score: number;
   accuracy: number;
   spread: number;
+  targetMs: number;
 }
-export function compare(trials: Trial[], settings: Settings): Comparison[] {
+export function compare(trials: Trial[], settings: TestConfig): Comparison[] {
   return VARIANTS.map((variant) => {
     const subset = currentTrials(trials, settings).filter(
       (t) => t.variant === variant,
@@ -129,56 +149,142 @@ export function compare(trials: Trial[], settings: Settings): Comparison[] {
       score: average(scores),
       accuracy: average(subset.map(accuracy)),
       spread: scores.length ? Math.max(...scores) - Math.min(...scores) : 0,
+      targetMs: average(subset.flatMap((t) => t.reactionMs)),
     };
   });
 }
+export interface OptimizationResult {
+  status: "pending" | "repeat" | "ready";
+  variant: Variant | null;
+  settings: Settings | null;
+  reason: string;
+  evidence: {
+    score: number;
+    accuracy: number;
+    targetMs: number;
+    trialCount: number;
+    gainPercent: number | null;
+    closeScores: boolean;
+    fitsSwipe: boolean | null;
+  } | null;
+}
 export function recommendation(
   trials: Trial[],
-  settings: Settings,
-): { variant: Variant | null; reason: string } {
+  settings: TestConfig,
+  swipeCm?: number,
+): OptimizationResult {
+  const incomplete = (
+    status: "pending" | "repeat",
+    reason: string,
+  ): OptimizationResult => ({
+    status,
+    variant: null,
+    settings: null,
+    evidence: null,
+    reason,
+  });
   const matching = currentTrials(trials, settings);
   const comparison = compare(matching, settings);
   if (comparison.some((c) => c.count < 2))
-    return {
-      variant: null,
-      reason: "Complete two trials per setting to compare all three fairly.",
-    };
+    return incomplete(
+      "pending",
+      "Complete two trials per setting to calculate your recommended settings.",
+    );
   if (new Set(comparison.map((c) => c.count)).size !== 1)
-    return {
-      variant: null,
-      reason:
-        "Finish this repeat set so every setting has the same number of trials before comparing.",
-    };
+    return incomplete(
+      "pending",
+      "Finish this repeat set so every setting has the same number of trials before comparing.",
+    );
   if (new Set(matching.map((t) => t.inputMode)).size !== 1)
-    return {
-      variant: null,
-      reason:
-        "These trials used different mouse input modes. Clear the results and repeat with one mode for a fair comparison.",
-    };
+    return incomplete(
+      "repeat",
+      "These trials used different mouse input modes. Start a fresh optimization and repeat with one mode for a fair comparison.",
+    );
   const sorted = [...comparison].sort((a, b) => b.score - a.score);
   const best = sorted[0];
   if (!best.score)
-    return {
-      variant: null,
-      reason: "No targets were hit yet. Warm up, then repeat the test set.",
-    };
-  if (best.score < sorted[1].score * 1.05)
-    return {
-      variant: "current",
-      reason:
-        "The top scores are within 5%. There is no clear winner; keep your current setting and verify it in the Range.",
-    };
+    return incomplete(
+      "repeat",
+      "No targets were hit yet. Warm up, then repeat the test set.",
+    );
   if (comparison.some((c) => c.spread > c.score * 0.35))
-    return {
-      variant: null,
-      reason:
-        "Your repeat scores vary a lot. Take a break, then repeat each setting before deciding.",
-    };
+    return incomplete(
+      "repeat",
+      "Your repeat scores vary a lot. Take a break, then repeat each setting before deciding.",
+    );
+  const options = candidates(settings);
+  const close = sorted.filter((c) => c.score >= best.score * 0.95);
+  const hasSwipe =
+    swipeCm !== undefined && Number.isFinite(swipeCm) && swipeCm > 0;
+  const fitting = hasSwipe
+    ? close.filter(
+        (c) =>
+          cm360(options.find((o) => o.variant === c.variant)!) / 2 <= swipeCm,
+      )
+    : [];
+  // Only favor space or a smaller change when performance is within 5% of the top.
+  const eligible = fitting.length ? fitting : close;
+  const chosen = [...eligible].sort((a, b) => {
+    const distance = (v: Variant) =>
+      Math.round(
+        Math.abs(
+          options.find((o) => o.variant === v)!.sensitivity -
+            settings.sensitivity,
+        ) * 10000,
+      );
+    return distance(a.variant) - distance(b.variant) || b.score - a.score;
+  })[0];
+  const candidate = options.find((c) => c.variant === chosen.variant)!;
+  const baseline = comparison.find((c) => c.variant === "current")!;
+  const fitsSwipe = hasSwipe ? cm360(candidate) / 2 <= swipeCm : null;
   return {
-    variant: best.variant,
+    status: "ready",
+    variant: chosen.variant,
+    settings: { dpi: candidate.dpi, sensitivity: candidate.sensitivity },
     reason:
-      "This setting scored highest in your browser trials. Treat it as a candidate and confirm comfort and control in Valorant.",
+      close.length > 1
+        ? fitting.length && fitting.length < close.length
+          ? "The leading scores are within 5%. This tested setting fits your estimated mouse travel, so it is the preferred choice among those similar results."
+          : chosen.variant === "current"
+            ? "Your baseline is within 5% of the highest score. Keep it: the test does not show a clear benefit from changing sensitivity."
+            : "The leading scores are within 5%, and both outperform the baseline. This tested setting makes the smallest change from your baseline."
+        : "This sensitivity had the highest accuracy-adjusted hit rate across your repeated trials. Apply it in Valorant, then check comfort and control in the Range.",
+    evidence: {
+      score: chosen.score,
+      accuracy: chosen.accuracy,
+      targetMs: chosen.targetMs,
+      trialCount: matching.length,
+      gainPercent: baseline.score
+        ? (chosen.score / baseline.score - 1) * 100
+        : null,
+      closeScores: close.length > 1,
+      fitsSwipe,
+    },
   };
+}
+
+export function refineConfiguration(
+  settings: TestConfig,
+  result: OptimizationResult,
+): TestConfig | null {
+  const stage = TEST_SPREADS.indexOf(
+    testSpread(settings) as (typeof TEST_SPREADS)[number],
+  );
+  if (
+    result.status !== "ready" ||
+    !result.settings ||
+    stage < 0 ||
+    stage === TEST_SPREADS.length - 1
+  )
+    return null;
+  const refined: TestConfig = {
+    ...result.settings,
+    spread: TEST_SPREADS[stage + 1],
+    ...(settings.runId ? { runId: settings.runId } : {}),
+  };
+  return new Set(candidates(refined).map((c) => c.sensitivity)).size === 3
+    ? refined
+    : null;
 }
 
 export interface Target {
@@ -221,11 +327,22 @@ export function hitsTarget(
   return Math.acos(Math.min(1, Math.max(-1, dot))) / radians <= target.radius;
 }
 
+function validConfig(value: TestConfig): boolean {
+  return (
+    !validateSettings(value.dpi, value.sensitivity) &&
+    (value.spread === undefined ||
+      TEST_SPREADS.some((s) => s === value.spread)) &&
+    (value.runId === undefined ||
+      (typeof value.runId === "string" &&
+        value.runId.length > 0 &&
+        value.runId.length < 100))
+  );
+}
 function validTrial(value: unknown): value is Trial {
   if (!value || typeof value !== "object") return false;
   const t = value as Trial;
   return (
-    !validateSettings(t.dpi, t.sensitivity) &&
+    validConfig(t) &&
     !validateSettings(t.dpi, t.baseline) &&
     VARIANTS.includes(t.variant) &&
     typeof t.id === "string" &&
@@ -248,7 +365,7 @@ function validRange(value: unknown): value is RangeCheck {
   if (!value || typeof value !== "object") return false;
   const r = value as RangeCheck;
   return (
-    !validateSettings(r.dpi, r.sensitivity) &&
+    validConfig(r) &&
     !validateSettings(r.dpi, r.baseline) &&
     VARIANTS.includes(r.variant) &&
     typeof r.id === "string" &&
@@ -265,6 +382,7 @@ export function parseSavedData(raw: string | null): SavedData {
   const fresh = (): SavedData => ({
     version: 1,
     settings: { ...DEFAULT_SETTINGS },
+    initialSettings: { ...DEFAULT_SETTINGS },
     swipeCm: 15,
     trials: [],
     rangeChecks: [],
@@ -272,18 +390,31 @@ export function parseSavedData(raw: string | null): SavedData {
   if (!raw) return fresh();
   try {
     const data = JSON.parse(raw) as SavedData;
-    if (
-      data.version !== 1 ||
-      !data.settings ||
-      validateSettings(data.settings.dpi, data.settings.sensitivity)
-    )
+    if (data.version !== 1 || !data.settings || !validConfig(data.settings))
       return fresh();
     return {
       version: 1,
       settings: {
         dpi: data.settings.dpi,
         sensitivity: data.settings.sensitivity,
+        ...(data.settings.spread !== undefined
+          ? { spread: data.settings.spread }
+          : {}),
+        ...(data.settings.runId !== undefined
+          ? { runId: data.settings.runId }
+          : {}),
       },
+      initialSettings:
+        data.initialSettings &&
+        !validateSettings(
+          data.initialSettings.dpi,
+          data.initialSettings.sensitivity,
+        )
+          ? {
+              dpi: data.initialSettings.dpi,
+              sensitivity: data.initialSettings.sensitivity,
+            }
+          : { dpi: data.settings.dpi, sensitivity: data.settings.sensitivity },
       swipeCm:
         Number.isFinite(data.swipeCm) &&
         data.swipeCm >= 3 &&
